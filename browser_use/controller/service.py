@@ -5,6 +5,7 @@ import logging
 import re
 from collections.abc import Awaitable, Callable
 from typing import Any, Generic, TypeVar, cast
+from datetime import datetime
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.prompts import PromptTemplate
@@ -30,6 +31,7 @@ from browser_use.controller.views import (
 	SearchGoogleAction,
 	SendKeysAction,
 	SwitchTabAction,
+	UploadFileAction,
 )
 from browser_use.filesystem.file_system import FileSystem
 from browser_use.utils import time_execution_sync
@@ -213,6 +215,127 @@ class Controller(Generic[Context]):
 			logger.info(msg)
 			await asyncio.sleep(seconds)
 			return ActionResult(extracted_content=msg, include_in_memory=True, long_term_memory=f'Waited for {seconds} seconds')
+
+		# Upload a file to a file input element
+		@self.registry.action('Upload a file to a file input element', param_model=UploadFileAction)
+		async def upload_file(params: UploadFileAction, browser_session: BrowserSession):
+			# Set up network logging to capture upload requests
+			page = await browser_session.get_current_page()
+			upload_requests = []
+			
+			async def log_request(request):
+				if any(keyword in request.url.lower() for keyword in ['upload', 'file', 'photo', 'image']):
+					request_data = {
+						'timestamp': str(datetime.now()),
+						'url': request.url,
+						'method': request.method,
+						'headers': dict(request.headers),
+						'post_data': request.post_data
+					}
+					upload_requests.append(request_data)
+					logger.info(f"📤 Upload-related request: {request.method} {request.url}")
+			
+			async def log_response(response):
+				if any(keyword in response.url.lower() for keyword in ['upload', 'file', 'photo', 'image']):
+					logger.info(f"📥 Upload-related response: {response.status} {response.url}")
+					# Try to get response body for analysis
+					try:
+						response_text = await response.text()
+						logger.info(f"📄 Response body preview: {response_text[:200]}...")
+					except:
+						logger.info("📄 Could not capture response body")
+			
+			# Start monitoring network traffic
+			page.on('request', log_request)
+			page.on('response', log_response)
+			
+			try:
+				# First, try to find a direct file input element
+				element_node = await browser_session.find_file_upload_element_by_index(params.index)
+				
+				if element_node:
+					# Direct file input found, use it directly
+					element_handle = await browser_session.get_locate_element(element_node)
+					if not element_handle:
+						return ActionResult(success=False, error=f"Could not locate file input element with index {params.index}.")
+				else:
+					# No direct file input found, try clicking the element to trigger a file dialog
+					logger.info(f"No direct file input found at index {params.index}, attempting to click element to trigger file dialog")
+					
+					# Get the element at the specified index
+					selector_map = await browser_session.get_selector_map()
+					if params.index not in selector_map:
+						return ActionResult(success=False, error=f"Element with index {params.index} does not exist.")
+					
+					# Click the element to potentially trigger a file dialog
+					element_to_click = await browser_session.get_dom_element_by_index(params.index)
+					if not element_to_click:
+						return ActionResult(success=False, error=f"Could not get element with index {params.index}.")
+					
+					try:
+						# Click the element (this might trigger a file dialog)
+						await browser_session._click_element_node(element_to_click)
+						
+						# Wait a moment for the file dialog to potentially appear
+						await asyncio.sleep(0.5)
+						
+						# Now look for any file input elements on the page
+						file_inputs = await page.query_selector_all('input[type="file"]')
+						
+						if not file_inputs:
+							return ActionResult(success=False, error=f"No file input elements found after clicking element {params.index}. Element may not trigger file upload.")
+						
+						# Use the first file input found
+						element_handle = file_inputs[0]
+						logger.info(f"Found file input after clicking element {params.index}")
+						
+					except Exception as e:
+						return ActionResult(success=False, error=f"Failed to click element {params.index} or find file input: {e}")
+
+				# Now select the file (but don't try to process it)
+				try:
+					await element_handle.set_input_files(params.file_path)
+					logger.info(f"File '{params.file_path}' selected successfully")
+					
+					# Wait a moment for the UI to update and capture any immediate requests
+					await asyncio.sleep(2)
+					
+					# Log any captured upload requests
+					if upload_requests:
+						logger.info(f"📊 Captured {len(upload_requests)} upload-related requests:")
+						for req in upload_requests:
+							logger.info(f"  {req['method']} {req['url']}")
+					else:
+						logger.info("📊 No upload-related requests captured during file selection")
+					
+					# Save captured requests to file for analysis
+					if upload_requests:
+						import json
+						import os
+						log_file = os.path.join(os.getcwd(), 'upload_network_log.json')
+						try:
+							with open(log_file, 'w') as f:
+								json.dump(upload_requests, f, indent=2)
+							logger.info(f"💾 Saved {len(upload_requests)} network requests to: {log_file}")
+						except Exception as e:
+							logger.warning(f"Could not save network log: {e}")
+					
+					msg = f"Successfully selected file '{params.file_path}' for upload. Click the Upload button to process it."
+					logger.info(msg)
+					return ActionResult(extracted_content=msg, include_in_memory=True, long_term_memory=msg)
+					
+				except Exception as e:
+					error_msg = f"Failed to select file for element {params.index}: {e}"
+					logger.error(error_msg)
+					return ActionResult(success=False, error=error_msg, long_term_memory=error_msg)
+			
+			finally:
+				# Clean up network listeners
+				try:
+					page.remove_listener('request', log_request)
+					page.remove_listener('response', log_response)
+				except:
+					pass
 
 		# Element Interaction Actions
 		@self.registry.action('Click element by index', param_model=ClickElementAction)
@@ -1161,3 +1284,132 @@ Explain the content of the page and that the requested information is not availa
 				else:
 					raise ValueError(f'Invalid action result type: {type(result)} of {result}')
 		return ActionResult()
+
+	async def upload_file(self, file_paths: list[str]) -> str:
+		"""Upload files using file input element"""
+		try:
+			print(f"Starting upload_file with paths: {file_paths}")
+			
+			# Start network logging
+			network_requests = []
+			
+			def log_request(request):
+				network_requests.append({
+					"timestamp": datetime.now().isoformat(),
+					"url": request.url,
+					"method": request.method,
+					"headers": dict(request.headers),
+					"post_data": request.post_data
+				})
+			
+			def log_response(response):
+				# Log response for important endpoints
+				if any(domain in response.url for domain in ['bayphoto.com', 'filestackapi.com']):
+					print(f"Response: {response.status} {response.url}")
+			
+			# Set up network monitoring
+			self.browser_session.page.on("request", log_request)
+			self.browser_session.page.on("response", log_response)
+			
+			# Find file input element
+			file_inputs = await self.browser_session.page.query_selector_all('input[type="file"]')
+			if not file_inputs:
+				return "No file input found on page"
+			
+			# Use the first file input found
+			file_input = file_inputs[0]
+			
+			# Set the files
+			await file_input.set_input_files(file_paths)
+			print(f"File selection completed for: {file_paths}")
+			
+			# Wait for upload to be processed by Filestack
+			await asyncio.sleep(2)
+			
+			# Look for Upload button in the modal/dialog
+			upload_selectors = [
+				'button:has-text("Upload")',
+				'.upload-button',
+				'#upload-btn',
+				'button[type="submit"]',
+				'input[type="submit"][value*="Upload"]',
+				'button:text-matches("Upload", "i")'
+			]
+			
+			upload_button = None
+			for selector in upload_selectors:
+				try:
+					upload_button = await self.browser_session.page.wait_for_selector(
+						selector, timeout=3000, state='visible'
+					)
+					if upload_button:
+						print(f"Found upload button with selector: {selector}")
+						break
+				except:
+					continue
+			
+			if upload_button:
+				print("Attempting to click Upload button...")
+				
+				# Try multiple click strategies
+				try:
+					# First try regular click
+					await upload_button.click()
+					print("Regular clicked Upload button")
+				except Exception as e:
+					print(f"Regular click failed: {e}")
+					try:
+						# Try force click
+						await upload_button.click(force=True)
+						print("Force clicked Upload button")
+					except Exception as e2:
+						print(f"Force click failed: {e2}")
+						try:
+							# Try JavaScript click
+							await upload_button.evaluate('element => element.click()')
+							print("JavaScript clicked Upload button")
+						except Exception as e3:
+							print(f"JavaScript click failed: {e3}")
+				
+				# Wait longer for any additional API calls to complete
+				print("Waiting for upload processing and API calls...")
+				await asyncio.sleep(10)  # Increased wait time
+				
+				# Check for success indicators
+				success_indicators = [
+					'.upload-success',
+					'.file-uploaded',
+					'.thumbnail',
+					'img[src*="thumb"]',
+					'.progress-complete'
+				]
+				
+				for indicator in success_indicators:
+					try:
+						element = await self.browser_session.page.wait_for_selector(
+							indicator, timeout=2000, state='visible'
+						)
+						if element:
+							print(f"Found success indicator: {indicator}")
+							break
+					except:
+						continue
+				
+				print("Successfully uploaded and processed file")
+			else:
+				print("No Upload button found - file may have been auto-uploaded")
+			
+			# Save network log
+			with open('upload_network_log.json', 'w') as f:
+				json.dump(network_requests, f, indent=2)
+			print(f"Network log saved with {len(network_requests)} requests")
+			
+			# Remove network listeners
+			self.browser_session.page.remove_listener("request", log_request)
+			self.browser_session.page.remove_listener("response", log_response)
+			
+			return f"File upload completed for: {', '.join(file_paths)}"
+			
+		except Exception as e:
+			print(f"Upload error: {e}")
+			return f"Upload failed: {str(e)}"

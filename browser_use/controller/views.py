@@ -44,11 +44,16 @@ class ScrollAction(BaseModel):
 
 
 class SendKeysAction(BaseModel):
-	keys: str
+	keys: str = Field(..., description='The keys to send to the browser, e.g. `Enter` or `Control+a`.')
 
 
 class ExtractPageContentAction(BaseModel):
 	value: str
+
+
+class UploadFileAction(BaseModel):
+	index: int = Field(..., description='The index of the file input element.')
+	file_path: str = Field(..., description='The local path to the file to upload.')
 
 
 class NoParamsAction(BaseModel):

@@ -998,30 +998,7 @@ class BrowserSession(BaseModel):
 		if self.browser_profile.stealth and not isinstance(self.playwright, Patchright):
 			self.logger.warning('⚠️ Failed to set up stealth mode. (...) got normal playwright objects as input.')
 
-	# async def _fork_locked_user_data_dir(self) -> None:
-	# 	"""Fork an in-use user_data_dir by cloning it to a new location to allow a second browser to use it"""
-	# 	# TODO: implement copy-on-write using overlayfs or zfs or something
-	# 	suffix_num = str(self.browser_profile.user_data_dir).rsplit('.', 1)[-1] or '1'
-	# 	suffix_num = int(suffix_num) if suffix_num.isdigit() else 1
-	# 	dir_name = self.browser_profile.user_data_dir.name
-	# 	incremented_name = dir_name.replace(f'.{suffix_num}', f'.{suffix_num + 1}')
-	# 	fork_path = self.browser_profile.user_data_dir.parent / incremented_name
-
-	# 	# keep incrementing the suffix_num until we find a path that doesn't exist
-	# 	while fork_path.exists():
-	# 		suffix_num += 1
-	# 		fork_path = self.browser_profile.user_data_dir.parent / (dir_name.rsplit('.', 1)[0] + f'.{suffix_num}')
-
-	# 	# use shutil to recursively copy the user_data_dir to a new location
-	# 	shutil.copytree(
-	# 		str(self.browser_profile.user_data_dir),
-	# 		str(fork_path),
-	# 		symlinks=True,
-	# 		ignore_dangling_symlinks=True,
-	# 		dirs_exist_ok=False,
-	# 	)
-	# 	self.browser_profile.user_data_dir = fork_path
-	# 	self.browser_profile.prepare_user_data_dir()
+		await self._setup_current_page_change_listeners()
 
 	async def _setup_current_page_change_listeners(self) -> None:
 		# Uses a combination of:
