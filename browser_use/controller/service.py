@@ -225,12 +225,22 @@ class Controller(Generic[Context]):
 			
 			async def log_request(request):
 				if any(keyword in request.url.lower() for keyword in ['upload', 'file', 'photo', 'image']):
+					# Safely handle post_data which might be binary
+					post_data = None
+					try:
+						post_data = request.post_data
+					except UnicodeDecodeError:
+						# Handle binary data (like file uploads, gzipped content)
+						post_data = "<BINARY_DATA>"
+					except Exception as e:
+						post_data = f"<ERROR_ACCESSING_DATA: {str(e)}>"
+					
 					request_data = {
 						'timestamp': str(datetime.now()),
 						'url': request.url,
 						'method': request.method,
 						'headers': dict(request.headers),
-						'post_data': request.post_data
+						'post_data': post_data
 					}
 					upload_requests.append(request_data)
 					logger.info(f"📤 Upload-related request: {request.method} {request.url}")
@@ -1294,12 +1304,22 @@ Explain the content of the page and that the requested information is not availa
 			network_requests = []
 			
 			def log_request(request):
+				# Safely handle post_data which might be binary
+				post_data = None
+				try:
+					post_data = request.post_data
+				except UnicodeDecodeError:
+					# Handle binary data (like file uploads, gzipped content)
+					post_data = "<BINARY_DATA>"
+				except Exception as e:
+					post_data = f"<ERROR_ACCESSING_DATA: {str(e)}>"
+				
 				network_requests.append({
 					"timestamp": datetime.now().isoformat(),
 					"url": request.url,
 					"method": request.method,
 					"headers": dict(request.headers),
-					"post_data": request.post_data
+					"post_data": post_data
 				})
 			
 			def log_response(response):
